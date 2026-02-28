@@ -1,5 +1,6 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
+const nodemailer = require('nodemailer');
 
 const LOCK_FILE = 'monitor.lock';
 const LAST_VERSION_FILE = 'last_version.txt';
@@ -8,22 +9,40 @@ const userAgents = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 ];
 
+// QQ 邮箱专用 SMTP 配置
+const transporter = nodemailer.createTransport({
+    host: 'smtp.qq.com',
+    port: 465,
+    secure: true, // 使用 SSL
+    auth: {
+        user: process.env.EMAIL_USER, // 你的 QQ 邮箱地址
+        pass: process.env.EMAIL_PASS  // 16位 QQ 邮箱授权码
+    }
+});
+
 /**
- * 检查是否已有实例在运行，防止 GitHub Actions 重叠执行
+ * 发送情报邮件通知
  */
-if (fs.existsSync(LOCK_FILE)) {
-    const pid = fs.readFileSync(LOCK_FILE, 'utf8');
-    console.log(`[警告] 检测到旧实例 (PID: ${pid}) 仍在运行，自动退出当前进程以防冲突。`);
-    process.exit(0);
+async function sendAlert(subject, text) {
+    const mailOptions = {
+        from: `"高维监控中心" <${process.env.EMAIL_USER}>`,
+        to: process.env.EMAIL_USER,
+        subject: subject,
+        text: text
+    };
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`[邮件推送成功] 目标: ${process.env.EMAIL_USER}`);
+    } catch (error) {
+        console.error(`[邮件推送失败] 异常信息: ${error.message}`);
+    }
 }
 
-// 写入当前进程 ID 作为锁
+if (fs.existsSync(LOCK_FILE)) {
+    process.exit(0);
+}
 fs.writeFileSync(LOCK_FILE, process.pid.toString());
-
-// 进程退出时自动清理锁文件
-process.on('exit', () => {
-    if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE);
-});
+process.on('exit', () => { if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE); });
 
 function fetchWithRetry(url, fileName, retries = 3) {
     const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
@@ -33,13 +52,13 @@ function fetchWithRetry(url, fileName, retries = 3) {
             return true;
         } catch (error) {
             if (i === retries - 1) throw error;
-            console.log(`[重试] 网络抖动，5秒后进行第 ${i + 1} 次重试...`);
+            console.log(`[网络重试] 正在尝试恢复连接... (${i + 1}/3)`);
             execSync('sleep 5');
         }
     }
 }
 
-function checkUpdate() {
+async function checkUpdate() {
     console.log(`--- [${new Date().toLocaleTimeString()}] 开启新一轮情报轮询 ---`);
     try {
         const indexUrl = "https://public-deploy6.test-eu.tankionline.com/browser-public/index.html";
@@ -50,32 +69,31 @@ function checkUpdate() {
         
         if (match) {
             const latestJs = match[0];
-            const jsUrl = `https://public-deploy6.test-eu.tankionline.com/browser-public/static/js/${latestJs}`;
-            
-            // 读取上次记录的版本
             const lastVersion = fs.existsSync(LAST_VERSION_FILE) ? fs.readFileSync(LAST_VERSION_FILE, 'utf8') : '';
 
             if (latestJs !== lastVersion) {
-                console.log(`【发现代码更新！】新版本号: ${latestJs}`);
-                fetchWithRetry(jsUrl, 'new_main.js');
+                console.log(`【发现代码更新！】版本号: ${latestJs}`);
+                fetchWithRetry(`https://public-deploy6.test-eu.tankionline.com/browser-public/static/js/${latestJs}`, 'new_main.js');
                 
                 const content = fs.readFileSync('new_main.js', 'utf8');
-                // 重点监控 Tsunami 和 旁观者限制逻辑
+                let alertMsg = `检测到 main.js 版本变动: ${latestJs}\n抓取地址: https://public-deploy6.test-eu.tankionline.com/browser-public/static/js/${latestJs}`;
+                
+                // 海啸炮塔指纹监控
                 if (/Tsunami|tsunami|spectator_limit/i.test(content)) {
-                    console.log("!!! 警报：在代码混淆段中提取到关键指纹，疑似海啸预置或权限变动 !!!");
+                    alertMsg += `\n\n!!! 核心预警：在代码段中捕捉到 Tsunami (海啸) 相关指纹，建议立即登入测试服进行物理压制 !!!`;
                 }
 
+                await sendAlert(`【降维打击】测试服版本更新: ${latestJs}`, alertMsg);
                 fs.writeFileSync(LAST_VERSION_FILE, latestJs);
-                console.log("情报已同步，版本库更新完成。");
             } else {
-                console.log(`状态：${latestJs} 依然是最新，无需同步。`);
+                console.log(`状态：${latestJs} 内容一致，暂无变动。`);
             }
         }
     } catch (err) {
-        console.error(`[致命错误] 执行检查失败: ${err.message}`);
+        console.error(`[系统异常] 轮询终止: ${err.message}`);
     }
 }
 
-// 保持 120 秒一轮的高频压制
+// 维持 120 秒/次的“上帝视角”轮询
 setInterval(checkUpdate, 120000);
 checkUpdate();
