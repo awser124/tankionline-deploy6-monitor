@@ -5,7 +5,7 @@ const nodemailer = require('nodemailer');
 // 配置
 const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2分钟
 const TOTAL_RUN_TIME_MS = 5.6 * 60 * 60 * 1000; // 5.6小时运行上限
-const BASE_URL = "https://public-deploy6.test-eu.tankionline.com"; // 去掉结尾斜杠以适配绝对路径
+const BASE_URL = "https://public-deploy6.test-eu.tankionline.com"; 
 const RECIPIENTS = "findor2026@hotmail.com, 1146608717@qq.com";
 
 const startTime = Date.now();
@@ -39,22 +39,24 @@ function commitToGit() {
 async function check() {
     console.log(`[${new Date().toLocaleTimeString()}] 正在拉取 JS 数据...`);
     try {
-        // 1. 抓取首页并匹配带前缀斜杠的路径
-        const html = execSync(`curl -s ${BASE_URL}/browser-public/`).toString();
-        // 修正正则以匹配 /browser-public/static/js/main.xxxx.js
-        const jsMatch = html.match(/\/browser-public\/static\/js\/main\.[a-z0-9]+\.js/);
+        // 使用 -L 跟随重定向，并加入 User-Agent 模拟浏览器
+        const html = execSync(`curl -sL -A "Mozilla/5.0" ${BASE_URL}/browser-public/`).toString();
+        
+        // 修正正则：直接查找包含 main.xxxx.js 的路径部分，不强制要求开头斜杠
+        // 匹配结果示例: browser-public/static/js/main.8ca908f8.js
+        const jsMatch = html.match(/browser-public\/static\/js\/main\.[a-z0-9]+\.js/);
         
         if (!jsMatch) {
-            console.log("未能从首页探测到 JS 路径，请检查 HTML 结构。");
+            console.log("未能探测到 JS 路径。");
             return;
         }
 
-        // 2. 拼接完整 URL (BASE_URL + /browser-public/...)
-        const targetUrl = BASE_URL + jsMatch[0];
+        // 拼接 URL。由于匹配结果自带 browser-public/，只需加域名和中间斜杠
+        const targetUrl = `${BASE_URL}/${jsMatch[0]}`;
         console.log(`探测到当前 JS 路径: ${targetUrl}`);
 
         // 下载文件
-        execSync(`curl -s ${targetUrl} > new_main.js`);
+        execSync(`curl -sL -A "Mozilla/5.0" ${targetUrl} > new_main.js`);
 
         if (fs.existsSync('current_main.js')) {
             // 提取文本常量进行对比
