@@ -25,4 +25,4 @@ jobs:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node persistent_monitor.js
+        run: node monitor.js
