@@ -6,7 +6,7 @@ const nodemailer = require('nodemailer');
 const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2分钟
 const TOTAL_RUN_TIME_MS = 5.6 * 60 * 60 * 1000; // 5.6小时运行上限
 const BASE_URL = "https://public-deploy6.test-eu.tankionline.com/browser-public"; 
-const RECIPIENTS = "findor2026@hotmail.com, 1146608717@qq.com";
+const RECIPIENTS = "findor2026@hotmail.com, 1146608717@qq.com, 3117422562@qq.com";
 
 const startTime = Date.now();
 
