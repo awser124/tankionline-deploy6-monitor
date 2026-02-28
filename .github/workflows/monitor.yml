@@ -1,0 +1,81 @@
+name: Tanki Test Server Monitor
+
+on:
+  schedule:
+    # 虽然设置是2分钟，但GitHub实际运行可能会延迟到5-10分钟
+    - cron: '*/2 * * * *' 
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16
+
+      - name: Install dependencies
+        run: npm install nodemailer
+
+      - name: Detect and Compare JS
+        id: check_js
+        run: |
+          # 1. 获取最新的 JS URL
+          BASE_URL="https://public-deploy6.test-eu.tankionline.com/browser-public/"
+          JS_RELATIVE_PATH=$(curl -s $BASE_URL | grep -oE "static/js/main\.[a-z0-9]+\.js" | head -n 1)
+          
+          if [ -z "$JS_RELATIVE_PATH" ]; then
+            echo "错误：无法获取 JS 路径"
+            exit 0
+          fi
+          
+          FULL_URL="${BASE_URL}${JS_RELATIVE_PATH}"
+          echo "最新 JS 地址: $FULL_URL"
+          
+          # 2. 对比逻辑
+          curl -s $FULL_URL > new_main.js
+          
+          # 如果 current_main.js 存在则对比
+          if [ -f "current_main.js" ]; then
+            # 提取字符串进行 diff
+            strings current_main.js > old_strings.txt
+            strings new_main.js > new_strings.txt
+            # 使用 diff 记录变化，如果没有变化则 diff.txt 为空
+            diff -u old_strings.txt new_strings.txt > diff.txt || true
+          fi
+
+          # 3. 判定更新情况
+          if [ -s diff.txt ]; then
+            echo "detected=true" >> $GITHUB_OUTPUT
+            echo "检测到代码变动"
+          else
+            echo "detected=false" >> $GITHUB_OUTPUT
+            echo "代码内容无变化或首次运行"
+          fi
+          
+          # 更新仓库内的 current 文件（覆盖旧文件）
+          mv new_main.js current_main.js
+
+      - name: Send Notification
+        if: steps.check_js.outputs.detected == 'true'
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        run: node send_email.js
+
+      - name: Git Commit and Push
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "Monitor Bot"
+          git add current_main.js
+          # 只有文件内容真的变了（或者文件名哈希变了）才提交
+          if git diff --cached --quiet; then
+            echo "无 Git 变更"
+          else
+            git commit -m "自动更新: 检测到测试服变更 $(date)"
+            git push
+          fi
