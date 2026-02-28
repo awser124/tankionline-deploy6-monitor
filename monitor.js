@@ -42,7 +42,7 @@ async function check() {
     console.log(`[${new Date().toLocaleTimeString()}] 正在检查更新...`);
     try {
         const html = execSync(`curl -s ${BASE_URL}`).toString();
-        const jsMatch = html.match(/static\/js\/main\.[a-z0-9]+\.js/);
+        const jsMatch = html.match(/\/static\/js\/main\.[a-z0-9]+\.js/);
         if (!jsMatch) {
             console.log("未能找到 JS 路径，可能服务器正在维护。");
             return;
