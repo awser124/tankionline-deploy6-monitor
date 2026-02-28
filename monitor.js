@@ -5,8 +5,7 @@ const nodemailer = require('nodemailer');
 // 配置
 const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2分钟
 const TOTAL_RUN_TIME_MS = 5.6 * 60 * 60 * 1000; // 5.6小时运行上限
-const BASE_URL = "https://public-deploy6.test-eu.tankionline.com/browser-public/";
-const KNOWN_JS_URL = "https://public-deploy6.test-eu.tankionline.com/browser-public/static/js/main.8ca908f8.js";
+const BASE_URL = "https://public-deploy6.test-eu.tankionline.com"; // 去掉结尾斜杠以适配绝对路径
 const RECIPIENTS = "findor2026@hotmail.com, 1146608717@qq.com";
 
 const startTime = Date.now();
@@ -40,24 +39,25 @@ function commitToGit() {
 async function check() {
     console.log(`[${new Date().toLocaleTimeString()}] 正在拉取 JS 数据...`);
     try {
-        let targetUrl = KNOWN_JS_URL;
+        // 1. 抓取首页并匹配带前缀斜杠的路径
+        const html = execSync(`curl -s ${BASE_URL}/browser-public/`).toString();
+        // 修正正则以匹配 /browser-public/static/js/main.xxxx.js
+        const jsMatch = html.match(/\/browser-public\/static\/js\/main\.[a-z0-9]+\.js/);
         
-        // 自动探测逻辑：如果旧地址失效，尝试从首页抓取最新地址
-        const html = execSync(`curl -s ${BASE_URL}`).toString();
-        const jsMatch = html.match(/static\/js\/main\.[a-z0-9]+\.js/);
-        
-        if (jsMatch) {
-            targetUrl = BASE_URL + jsMatch[0];
-            console.log(`探测到当前 JS 路径: ${targetUrl}`);
-        } else {
-            console.log("提示：未能从首页探测到 JS，将使用硬编码地址。");
+        if (!jsMatch) {
+            console.log("未能从首页探测到 JS 路径，请检查 HTML 结构。");
+            return;
         }
+
+        // 2. 拼接完整 URL (BASE_URL + /browser-public/...)
+        const targetUrl = BASE_URL + jsMatch[0];
+        console.log(`探测到当前 JS 路径: ${targetUrl}`);
 
         // 下载文件
         execSync(`curl -s ${targetUrl} > new_main.js`);
 
         if (fs.existsSync('current_main.js')) {
-            // 提取文本常量进行对比（防止混淆代码导致 diff 失效）
+            // 提取文本常量进行对比
             execSync(`strings current_main.js > old_strings.txt`);
             execSync(`strings new_main.js > new_strings.txt`);
             
@@ -76,7 +76,7 @@ async function check() {
             }
         }
         
-        // 更新本地备份以便下次对比
+        // 更新本地备份
         fs.renameSync('new_main.js', 'current_main.js');
         console.log("数据一致，未发现变动。");
     } catch (err) {
