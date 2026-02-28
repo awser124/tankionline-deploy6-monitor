@@ -2,10 +2,11 @@ const fs = require('fs');
 const { execSync } = require('child_process');
 const nodemailer = require('nodemailer');
 
-// 配置信息
-const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2分钟检查一次
-const TOTAL_RUN_TIME_MS = 5.6 * 60 * 60 * 1000; // 持续运行5.6小时
+// 配置
+const CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2分钟
+const TOTAL_RUN_TIME_MS = 5.6 * 60 * 60 * 1000; // 5.6小时运行上限
 const BASE_URL = "https://public-deploy6.test-eu.tankionline.com/browser-public/";
+const KNOWN_JS_URL = "https://public-deploy6.test-eu.tankionline.com/browser-public/static/js/main.8ca908f8.js";
 const RECIPIENTS = "findor2026@hotmail.com, 1146608717@qq.com";
 
 const startTime = Date.now();
@@ -15,13 +16,15 @@ async function sendEmail(diffContent) {
         service: 'qq',
         auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
     });
-
-    await transporter.sendMail({
-        from: `"3D坦克监控站" <${process.env.EMAIL_USER}>`,
-        to: RECIPIENTS,
-        subject: "【紧急更新】3D坦克测试服JS内容变动",
-        text: "检测到海啸炮塔相关或底层逻辑更新：\n\n" + diffContent
-    });
+    try {
+        await transporter.sendMail({
+            from: `"3D坦克监控" <${process.env.EMAIL_USER}>`,
+            to: RECIPIENTS,
+            subject: "【警告】3D坦克测试服JS逻辑变动",
+            text: "检测到测试服 main.js 字符串差异：\n\n" + diffContent
+        });
+        console.log("邮件通知已发出");
+    } catch (e) { console.error("邮件发送失败:", e); }
 }
 
 function commitToGit() {
@@ -29,39 +32,42 @@ function commitToGit() {
         execSync('git config --local user.email "actions@github.com"');
         execSync('git config --local user.name "Monitor Bot"');
         execSync('git add current_main.js');
-        // 如果文件确实有变化，则提交
-        execSync('git commit -m "自动更新: 检测到测试服变更 ' + new Date().toLocaleString() + '"');
+        execSync(`git commit -m "Update JS Data: ${new Date().toLocaleString()}"`);
         execSync('git push');
-        console.log("Git 提交成功");
-    } catch (e) {
-        console.log("Git 提交跳过（可能无实际文件变动）");
-    }
+    } catch (e) { console.log("Git 提交无变动"); }
 }
 
 async function check() {
-    console.log(`[${new Date().toLocaleTimeString()}] 正在检查更新...`);
+    console.log(`[${new Date().toLocaleTimeString()}] 正在拉取 JS 数据...`);
     try {
+        let targetUrl = KNOWN_JS_URL;
+        
+        // 自动探测逻辑：如果旧地址失效，尝试从首页抓取最新地址
         const html = execSync(`curl -s ${BASE_URL}`).toString();
-        const jsMatch = html.match(/\/static\/js\/main\.[a-z0-9]+\.js/);
-        if (!jsMatch) {
-            console.log("未能找到 JS 路径，可能服务器正在维护。");
-            return;
+        const jsMatch = html.match(/static\/js\/main\.[a-z0-9]+\.js/);
+        
+        if (jsMatch) {
+            targetUrl = BASE_URL + jsMatch[0];
+            console.log(`探测到当前 JS 路径: ${targetUrl}`);
+        } else {
+            console.log("提示：未能从首页探测到 JS，将使用硬编码地址。");
         }
 
-        const fullUrl = BASE_URL + jsMatch[0];
-        execSync(`curl -s ${fullUrl} > new_main.js`);
+        // 下载文件
+        execSync(`curl -s ${targetUrl} > new_main.js`);
 
         if (fs.existsSync('current_main.js')) {
+            // 提取文本常量进行对比（防止混淆代码导致 diff 失效）
             execSync(`strings current_main.js > old_strings.txt`);
             execSync(`strings new_main.js > new_strings.txt`);
             
             try {
-                // diff 如果发现不同会返回非0状态码，触发 catch
+                // diff -u 如果发现不同会抛出错误状态码
                 execSync(`diff -u old_strings.txt new_strings.txt > diff.txt`);
             } catch (diffError) {
                 const diffContent = fs.readFileSync('diff.txt', 'utf-8');
                 if (diffContent.trim()) {
-                    console.log("检测到差异！正在发送邮件...");
+                    console.log("！！！检测到代码差异！！！");
                     await sendEmail(diffContent);
                     fs.renameSync('new_main.js', 'current_main.js');
                     commitToGit();
@@ -70,25 +76,26 @@ async function check() {
             }
         }
         
-        // 即使内容没变，如果哈希文件名变了，我们也更新 current_main.js
+        // 更新本地备份以便下次对比
         fs.renameSync('new_main.js', 'current_main.js');
-    } catch (error) {
-        console.error("检查过程出错:", error.message);
+        console.log("数据一致，未发现变动。");
+    } catch (err) {
+        console.error("执行检查时发生异常:", err.message);
     }
 }
 
 async function main() {
-    // 启动时先创建 current_main.js 以防首次运行失败
+    console.log("3D坦克测试服高频监控启动...");
+    // 首次运行初始化
     if (!fs.existsSync('current_main.js')) {
-        console.log("首次运行，正在初始化 current_main.js...");
-        await check(); 
+        await check();
     }
-
+    
     while (Date.now() - startTime < TOTAL_RUN_TIME_MS) {
         await check();
-        await new Promise(resolve => setTimeout(resolve, CHECK_INTERVAL_MS));
+        await new Promise(r => setTimeout(r, CHECK_INTERVAL_MS));
     }
-    console.log("达到本次运行时间上限，脚本退出。");
+    console.log("本次监控周期结束。");
 }
 
 main();
