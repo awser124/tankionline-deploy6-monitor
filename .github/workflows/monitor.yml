@@ -1,28 +1,34 @@
-name: Tanki Test Server High-Frequency Monitor
+name: Tanki Online Monitor (Tsunami/Spectator)
 
 on:
   schedule:
-    - cron: '0 */5 * * *' # 每5小时启动一次
-  workflow_dispatch:
+    - cron: '0 */5 * * *' # 每 5 小时启动一次，持续运行
+  workflow_dispatch:      # 支持手动点击启动
+
+# 核心防冲突逻辑：如果新的启动了，自动杀掉旧的，确保全局只有一个实例在运行
+concurrency:
+  group: tanki-monitor
+  cancel-in-progress: true
 
 jobs:
-  monitor:
+  run-monitor:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: 检出代码仓库
+        uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      - name: 初始化 Node.js 环境
+        uses: actions/setup-node@v4
         with:
-          node-version: 16
+          node-version: '20'
 
-      - name: Install dependencies
-        run: npm install nodemailer axios
+      - name: 安装核心依赖 (Nodemailer & Diff)
+        run: |
+          npm init -y
+          npm install nodemailer diff
 
-      - name: Run Persistent Monitor
+      - name: 启动监控脚本
         env:
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }} # 请在 Repo Settings 中配置
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }} # 请在 Repo Settings 中配置
         run: node monitor.js
