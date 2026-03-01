@@ -1,9 +1,8 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
-const Diff = require('diff'); // 需要 npm install diff
+const Diff = require('diff');
 
-const LOCK_FILE = 'monitor.lock';
 const LAST_VERSION_FILE = 'last_version.txt';
 const OLD_JS_FILE = 'old_main.js';
 const NEW_JS_FILE = 'new_main.js';
@@ -19,37 +18,36 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * 提取包含关键指纹的 Diff 片段
- * 避免全量发送混淆后的几万行代码
+ * 提取特定关键词的变更片段
  */
 function getTargetedDiff(oldContent, newContent) {
     const keywords = [/Tsunami/i, /tsunami/i, /spectator/i, /vlog/i, /TsunamiTurret/i];
+    // 使用 diffLines 进行逐行对比
     const diffs = Diff.diffLines(oldContent, newContent);
     let result = "";
 
     diffs.forEach((part) => {
-        // 仅记录增加或删除的部分，且包含关键词
         if ((part.added || part.removed) && keywords.some(regex => regex.test(part.value))) {
-            const prefix = part.added ? '[新增] ' : '[移除] ';
+            const prefix = part.added ? '[ADDED] ' : '[REMOVED] ';
             result += `\n${prefix}----------------------\n${part.value.trim()}\n`;
         }
     });
 
-    return result || "未发现核心指纹变动，仅为常规逻辑优化。";
+    return result;
 }
 
 async function sendAlert(subject, text) {
     const mailOptions = {
-        from: `"3D坦克测试服监测" <${process.env.EMAIL_USER}>`,
+        from: `"Monitor System" <${process.env.EMAIL_USER}>`,
         to: process.env.EMAIL_USER,
         subject: subject,
         text: text
     };
     try {
         await transporter.sendMail(mailOptions);
-        console.log(`[数据已发送]`);
+        console.log(`[Notification] 邮件已发送`);
     } catch (error) {
-        console.error(`[推送失败]: ${error.message}`);
+        console.error(`[Error] 邮件发送失败: ${error.message}`);
     }
 }
 
@@ -58,13 +56,12 @@ function fetchWithRetry(url, fileName) {
         execSync(`curl -sL --connect-timeout 20 -A "Mozilla/5.0" "${url}" > ${fileName}`);
         return true;
     } catch (e) {
-        console.log(`抓取失败，跳过本次轮询。`);
         return false;
     }
 }
 
 async function checkUpdate() {
-    console.log(`--- [${new Date().toLocaleTimeString()}] 正在扫描测试服底层逻辑 ---`);
+    console.log(`--- [${new Date().toLocaleTimeString()}] 正在同步远程代码状态 ---`);
     try {
         const indexUrl = "https://public-deploy6.test-eu.tankionline.com/browser-public/index.html";
         if (!fetchWithRetry(indexUrl, 'index.html')) return;
@@ -74,34 +71,46 @@ async function checkUpdate() {
         
         if (match) {
             const latestJs = match[0];
-            const lastVersion = fs.existsSync(LAST_VERSION_FILE) ? fs.readFileSync(LAST_VERSION_FILE, 'utf8') : '';
+            const lastVersion = fs.existsSync(LAST_VERSION_FILE) ? fs.readFileSync(LAST_VERSION_FILE, 'utf8').trim() : '';
 
             if (latestJs !== lastVersion) {
-                console.log(`【警报】发现新版本: ${latestJs}`);
+                console.log(`[Update] 检测到新版本: ${latestJs}`);
                 const jsUrl = `https://public-deploy6.test-eu.tankionline.com/browser-public/static/js/${latestJs}`;
                 
                 if (fetchWithRetry(jsUrl, NEW_JS_FILE)) {
-                    let diffReport = "暂无旧版本对比数据。";
+                    let diffReport = "初始运行，无对比基准。";
                     
                     if (fs.existsSync(OLD_JS_FILE)) {
                         const oldContent = fs.readFileSync(OLD_JS_FILE, 'utf8');
                         const newContent = fs.readFileSync(NEW_JS_FILE, 'utf8');
-                        diffReport = getTargetedDiff(oldContent, newContent);
+                        diffReport = getTargetedDiff(oldContent, newContent) || "代码哈希变更，但指定关键词逻辑未发生变动。";
                     }
 
-                    const alertMsg = `版本号变动: ${latestJs}\n\n核心逻辑 Diff 分析:\n${diffReport}\n\n抓取地址: ${jsUrl}`;
-                    await sendAlert(`【】Tsunami/权限 逻辑变动报告`, alertMsg);
+                    const alertMsg = `版本变动: ${latestJs}\n\n代码逻辑 Diff 分析:\n${diffReport}\n\n地址: ${jsUrl}`;
+                    await sendAlert(`代码版本更新报告: ${latestJs}`, alertMsg);
 
-                    // 更新持久化数据
+                    // 同步文件用于下次对比
                     fs.copyFileSync(NEW_JS_FILE, OLD_JS_FILE);
                     fs.writeFileSync(LAST_VERSION_FILE, latestJs);
+                    
+                    // 将变更同步至仓库，确保跨工作流持久化
+                    try {
+                        execSync('git config --global user.name "Version-Bot"');
+                        execSync('git config --global user.email "bot@version.com"');
+                        execSync('git add last_version.txt old_main.js');
+                        execSync('git commit -m "Update JS baseline"');
+                        execSync('git push');
+                        console.log("[Git] 基准线已更新至仓库。");
+                    } catch (e) {
+                        console.log("[Git] 无需提交或同步失败。");
+                    }
                 }
             } else {
-                console.log(`状态稳定：${latestJs}`);
+                console.log(`[Info] 当前版本 ${latestJs} 已是最新。`);
             }
         }
     } catch (err) {
-        console.error(`错误: ${err.message}`);
+        console.error(`[Fatal] 运行异常: ${err.message}`);
     }
 }
 
