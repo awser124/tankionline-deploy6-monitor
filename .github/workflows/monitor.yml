@@ -13,6 +13,8 @@ concurrency:
 jobs:
   run-monitor:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: 检出代码仓库
         uses: actions/checkout@v4
