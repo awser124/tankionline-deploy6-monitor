@@ -18,22 +18,53 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * 提取特定关键词的变更片段
+ * 提取特定关键词的变更片段 (优化压缩 JS 版本)
  */
 function getTargetedDiff(oldContent, newContent) {
     const keywords = [/Tsunami/i, /tsunami/i, /spectator/i, /vlog/i, /TsunamiTurret/i];
-    // 使用 diffLines 进行逐行对比
-    const diffs = Diff.diffLines(oldContent, newContent);
-    let result = "";
+
+    // 1. 强制断行：在括号、分号、逗号后面加上换行符，将一行的压缩代码拆成多行，方便精确 Diff
+    const formatForDiff = (code) => code.replace(/([{};,])/g, "$1\n");
+    const formattedOld = formatForDiff(oldContent);
+    const formattedNew = formatForDiff(newContent);
+
+    // 2. 进行逐行对比
+    const diffs = Diff.diffLines(formattedOld, formattedNew);
+    const results = new Set(); // 使用 Set 自动去重
 
     diffs.forEach((part) => {
-        if ((part.added || part.removed) && keywords.some(regex => regex.test(part.value))) {
-            const prefix = part.added ? '[ADDED] ' : '[REMOVED] ';
-            result += `\n${prefix}----------------------\n${part.value.trim()}\n`;
+        if (part.added || part.removed) {
+            // 将变更块按行打散
+            const lines = part.value.split('\n');
+
+            lines.forEach(line => {
+                // 寻找命中关键词的行
+                const matchedKeyword = keywords.find(regex => regex.test(line));
+                
+                if (matchedKeyword) {
+                    const prefix = part.added ? '[+ 新增]' : '[- 移除]';
+                    let snippet = line.trim();
+
+                    // 3. 上下文截断：如果单行代码仍然超过 200 个字符，只截取关键词前后各 80 个字符
+                    if (snippet.length > 200) {
+                        const match = matchedKeyword.exec(snippet);
+                        if (match) {
+                            const start = Math.max(0, match.index - 80);
+                            const end = Math.min(snippet.length, match.index + match[0].length + 80);
+                            snippet = (start > 0 ? "..." : "") + 
+                                      snippet.substring(start, end) + 
+                                      (end < snippet.length ? "..." : "");
+                        }
+                    }
+
+                    results.add(`${prefix} ${snippet}`);
+                }
+            });
         }
     });
 
-    return result;
+    const finalReport = Array.from(results).join('\n----------------------\n');
+    return finalReport.length > 0 ? finalReport : null;
 }
 
 async function sendAlert(subject, text) {
